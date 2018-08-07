@@ -1,0 +1,44 @@
+#!/bin/bash
+
+CONFIG_FILE="$(dirname $0)/run_bus.conf"
+PROPERTIES="$(dirname $0)/connection.properties"
+
+ if [ $# != 4 ]; then
+     echo "usage: $(basename $0) <HOST> <MQ> <MQPORT>" >&2
+     exit 1
+ fi
+
+set -e
+runas=$(awk 'BEGIN {FS=":[[:space:]]*"} /^runas:/ {print $2}' "$CONFIG_FILE")
+
+HOST=$1
+MQ=$2
+MQPORT=$3
+IP=$4
+
+LOGDIR=$(awk 'BEGIN {FS=":[[:space:]]*"} /^logdir:/ {print $2}' "$CONFIG_FILE")
+STATUSDIR=$(awk 'BEGIN {FS=":[[:space:]]*"} /^statusdir:/ {print $2}' "$CONFIG_FILE")
+MAX_DAYS_TO_KEEP=$(awk 'BEGIN {FS=":[[:space:]]*"} /^history_maxdays:/ {print $2}' "$CONFIG_FILE")
+
+LOGFILE="${LOGDIR:-/tmp}/$(basename $1).log"
+STATUSFILE="${STATUSDIR:-/tmp}/$(basename $1).status"
+TMPDIR="${STATUSDIR:-/tmp}/$(basename $1)"
+
+(
+  echo "=========="
+  echo "*** $(date --rfc-3339=seconds)"
+  echo "*** $0 $*"
+  echo "*** cleaning up old results and reports"
+
+  mkdir -p "$TMPDIR"
+  REPORT_DIR=$(mktemp --tmpdir="$TMPDIR" -d $(date +%Y-%m-%d-%H-%M).XXX)
+
+  FIND_OPTS="-type d -ctime +${MAX_DAYS_TO_KEEP:-3} -prune -print -execdir rm -rf {} +"
+
+  find "$TMPDIR" -mindepth 1 -maxdepth 1 $FIND_OPTS
+
+  python $(dirname $0)/run_bus.py $HOST $PROPERTIES "$REPORT_DIR" "$MQ" "$MQPORT" "$IP"
+  echo $? > "${STATUSFILE}"
+) >>"$LOGFILE" 2>&1 </dev/null &
+
+disown -ha
