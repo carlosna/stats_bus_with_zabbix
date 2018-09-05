@@ -13,7 +13,6 @@ from sender import ZabbixSender
 import time
 import subprocess
 import json
-import threading
 
 class BusController:
 
@@ -28,64 +27,67 @@ class BusController:
    def exist(self, zapi, host):
    
        host_ = zapi.host.get({
-           "output": ["hostid"],
+           "output": "extend",
            "filter": {
                    "host": host
            }
        })
        
-       hostid = int(host_[0]['hostid'])
-
+       print(host_)
+       
        if host_ is None:
           raise Exception(host + " não criado")
           exit(4)
        else:
-          return hostid
+          items = zapi.item.get({
+              "output": "extend",
+              "host": host,
+          })
+#          if items is None or len(items) == 0:
+#                raise("Cannot find item {}".format(host))
+#                exit(4)
+#          else:
+          print(list(map(lambda x: x['key_'], items)) , host)
+          return (list(map(lambda x: x['key_'], items)))
    
    def param(self, item):
        if not re.findall(r'^.*\[', item):
-           raise("Cannot find item {}")
-           exit(4)
+           return None
        else:
            return re.search('.*\[(.*)\]', item).group(1)
 
-   def items_find(self, zapi, metric, hostid, name):
-        
-            name_ = string.capwords(name) + " " + metric.lower()
-        
-            print(name_)
-            return zapi.item.get({
-                  "output": ["key_"],
-                  "filter": {
-                         "hostids": hostid,
-                         "name": name_
-                  }
-            })
-
-   def discovery(self, zapi, metric, name, host, hostid):
-
-           details_to_create = zapi.host.get({
-                                "selectInterfaces": ["interfaceid"],
-                                "filter": {
-                                       "host": host
-                                }
-                   })
-           
-           interfaceid = details_to_create[0]['interfaces'][0]['interfaceid']
-           ref_key = metric.replace(" ","_").lower() + "[" + name + "]"
-
-           item_id = zapi.item.create({
-                           "name": string.capwords(name) + " " + metric.lower(),
-                           "key_": ref_key,
-                           "hostid": hostid,
-                           "type": 2,
-                           "value_type": 3,
-                           "interfaceid": interfaceid,
-                           "history": "90",
-                           "trends": "365"
-                 })
-           print(item_id)
-           print("Item criado com id %d" % int(item_id['itemids'][0]))
+   def discovery(self, zapi, header, name, host, application):
+        keys_in_host = []
+        columns = header.split(";")
+        details_to_create = zapi.host.get({
+                             "output": ["hostid","interfaceids"],
+                             "selectItems": "extend",
+                             "filter": {
+                                    "host": host
+                             }
+                })
+ 
+        for x in details_to_create[0]['items']:
+            interfaceid = x['interfaceid']
+            hostid = x['hostid']
+            keys_in_host.append(x['key_'])
+ 
+        for metric in columns[4:]:
+            ref_key = metric.replace(" ","_").lower() + "[" + name + "]"
+            if ref_key not in keys_in_host:
+                  item_id = zapi.item.create({
+                            "name": string.capwords(name) + " " + metric.lower(),
+                            "key_": ref_key,
+                            "hostid": hostid,
+                            "type": 2,
+                            "value_type": 3,
+                            "interfaceid": interfaceid,
+                            "history": "90",
+                            "trends": "365"
+                  })
+                  print(item_id)
+ #                  except:
+ #                     print("Não foi possível criar o item %s" % (ref_key))
  
    def sender_object(self):
        ZABBIX_HOST = "localhost"
@@ -104,16 +106,10 @@ class BusController:
  
          print (' '.join(cmdline))
          os.system(' '.join(cmdline))
+ 
+  	 #proc = subprocess.Popen(["pgrep", cmdline], stdout=subprocess.PIPE) 
 
-   def metrics(self, header):
-        columns = header.split(";")
-        metrics = []
-        for metric in columns[4:]:
-           metrics.append(metric)
-
-        return metrics
-
-   def parseReport(self, host, hostid, reportDir, zapi):
+   def parseReport(self, item, host, reportDir, zapi):
    
        path = reportDir + "/stats-bus-server-"
        files = ["threads", "jvm"]
@@ -123,21 +119,15 @@ class BusController:
                rownum = 0
                reader = csv.reader(file)
                for row in reader:
-                      if rownum == 0 or header == row:
-                          header = row
-                      elif any(host in s for s in row):
-                             for col in row:
-                                 name = col.split(";")[3]
-                                 lista_de_metricas = self.metrics(str(header).replace("']",""))
-                                 for metric in lista_de_metricas:
- 				     print(metric)
-                                     item = self.items_find(zapi, metric, hostid, name)
-                                     if not item:
-                                          self.discovery(zapi, metric, name, host, hostid)
-                                     elif col.find(name) >= 0 and col.find(host) >= 0:
-                                          result = self.switch(i, col)
-                                          self.send_data(result, i, name, host)
-                      rownum += 1
+                   if rownum == 0 or header == row:
+                       header = row
+                   else:
+                       for col in row:
+                           self.discovery(zapi, str(header).replace("']",""), col.split(";")[3], host, i)
+                           if col.find(item) >= 0 and col.find(host) >= 0:
+                               result = self.switch(i, col)
+                               self.send_data(result, i, item, host)
+                   rownum += 1
 
    def switch(self, i, col):
        case = {}
@@ -156,7 +146,7 @@ class BusController:
    def send_data(self, result, metric, param, host):
        if result != None:
            sender = self.sender_object()
-           print "*** Send data..."
+           print("Send data...")
            if metric == "threads":
               sender.add(host, "threads_used[" + param + "]" , result[1], result[0])
 
@@ -197,14 +187,13 @@ class BusController:
        zapi.login(user, passwd)
 
        self.runPlugin()
-       hostid = self.exist(zapi, host)
-       if hostid > 0:
-#       if lista is not None:
-#       for i in lista:
-#           value = self.param(i)
-#               if value is None: continue
-#               else: i
-         self.parseReport(host, hostid, self.busReportDir, zapi)
+   
+       lista = self.exist(zapi, host)
+       if lista is not None:
+           for i in lista:
+               value = self.param(i)
+               if value is None: continue
+               else: self.parseReport(value, host, self.busReportDir, zapi)
    
        exit(0) 
 
