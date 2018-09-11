@@ -34,14 +34,13 @@ class BusController:
            }
        })
        
-       hostid = int(host_[0]['hostid'])
-
-       if host_ is None:
-          raise Exception(host + " não criado")
+       print(host_)
+       if not host_:
+          raise Exception("%s não existe" % host)
           exit(4)
-       else:
-          return hostid
-   
+       else:       
+          return int(host_[0]['hostid'])
+
    def param(self, item):
        if not re.findall(r'^.*\[', item):
            raise("Cannot find item {}")
@@ -49,15 +48,14 @@ class BusController:
        else:
            return re.search('.*\[(.*)\]', item).group(1)
 
-   def items_find(self, zapi, metric, hostid, name):
+   def items_find(self, zapi, metric, host, name):
         
             name_ = string.capwords(name) + " " + metric.lower()
         
-            print(name_)
             return zapi.item.get({
                   "output": ["key_"],
                   "filter": {
-                         "hostids": hostid,
+                         "host": host,
                          "name": name_
                   }
             })
@@ -84,7 +82,6 @@ class BusController:
                            "history": "90",
                            "trends": "365"
                  })
-           print(item_id)
            print("Item criado com id %d" % int(item_id['itemids'][0]))
  
    def sender_object(self):
@@ -130,8 +127,7 @@ class BusController:
                                  name = col.split(";")[3]
                                  lista_de_metricas = self.metrics(str(header).replace("']",""))
                                  for metric in lista_de_metricas:
- 				     print(metric)
-                                     item = self.items_find(zapi, metric, hostid, name)
+                                     item = self.items_find(zapi, metric, host, name)
                                      if not item:
                                           self.discovery(zapi, metric, name, host, hostid)
                                      elif col.find(name) >= 0 and col.find(host) >= 0:
@@ -199,11 +195,6 @@ class BusController:
        self.runPlugin()
        hostid = self.exist(zapi, host)
        if hostid > 0:
-#       if lista is not None:
-#       for i in lista:
-#           value = self.param(i)
-#               if value is None: continue
-#               else: i
          self.parseReport(host, hostid, self.busReportDir, zapi)
    
        exit(0) 
